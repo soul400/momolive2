@@ -3,6 +3,7 @@ import { Header } from "@/components/header";
 import { Footer } from "@/components/footer";
 import { StreamForm } from "@/components/stream-form";
 import { RecordingsList } from "@/components/recordings-list";
+import { ActiveRecordings } from "@/components/active-recordings";
 import { AboutSection } from "@/components/about-section";
 import { Button } from "@/components/ui/button";
 import { Link } from "wouter";
@@ -28,6 +29,8 @@ export default function Home() {
         </section>
         
         <StreamForm />
+        
+        <ActiveRecordings />
         
         {hasRecordings ? (
           <>

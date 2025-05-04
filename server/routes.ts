@@ -150,7 +150,59 @@ export async function registerRoutes(app: Express): Promise<Server> {
     }
   });
   
-  // 7. Download segment
+  // 7. Stop recording
+  app.post('/api/streams/:id/stop', async (req: Request, res: Response) => {
+    try {
+      const id = parseInt(req.params.id, 10);
+      if (isNaN(id)) {
+        return res.status(400).json({ message: 'معرف غير صالح' });
+      }
+      
+      const stream = await storage.getStream(id);
+      if (!stream) {
+        return res.status(404).json({ message: 'لم يتم العثور على البث' });
+      }
+      
+      // Check if recording is active
+      if (!activeRecordings.has(id)) {
+        return res.status(400).json({ message: 'البث غير نشط حالياً' });
+      }
+      
+      // Stop the recording
+      const success = await stopRecording(id);
+      
+      if (success) {
+        res.status(200).json({ message: 'تم إيقاف التسجيل بنجاح' });
+      } else {
+        res.status(500).json({ message: 'فشل إيقاف التسجيل' });
+      }
+    } catch (error) {
+      console.error('Stop recording error:', error);
+      res.status(500).json({ message: 'حدث خطأ أثناء إيقاف التسجيل' });
+    }
+  });
+
+  // 8. Get active recordings status
+  app.get('/api/recordings/active', async (_req: Request, res: Response) => {
+    try {
+      const activeIds = Array.from(activeRecordings.keys());
+      const activeStreams = [];
+      
+      for (const id of activeIds) {
+        const stream = await storage.getStream(id);
+        if (stream) {
+          activeStreams.push(stream);
+        }
+      }
+      
+      res.status(200).json(activeStreams);
+    } catch (error) {
+      console.error('Get active recordings error:', error);
+      res.status(500).json({ message: 'حدث خطأ أثناء جلب التسجيلات النشطة' });
+    }
+  });
+
+  // 9. Download segment
   app.get('/api/segments/:id/download', async (req: Request, res: Response) => {
     try {
       const id = parseInt(req.params.id, 10);
