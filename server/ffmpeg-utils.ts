@@ -29,10 +29,20 @@ function ensureDirectoriesExist() {
 }
 
 // Record stream from jaco.live
+// Store active recording processes by stream ID
+export const activeRecordings = new Map<number, { process: ReturnType<typeof exec>, outputPath: string, streamBaseName: string }>();
+
+// Record stream from jaco.live
 export async function recordStream(stream: Stream): Promise<void> {
   ensureDirectoriesExist();
   
   try {
+    // Check if stream is already recording
+    if (activeRecordings.has(stream.id)) {
+      console.log(`Stream ${stream.id} is already recording`);
+      return;
+    }
+    
     // Update stream status to recording
     await storage.updateStreamStatus(stream.id, 'recording');
     
@@ -40,39 +50,114 @@ export async function recordStream(stream: Stream): Promise<void> {
     const streamBaseName = `stream_${stream.id}_${Date.now()}`;
     const outputPath = path.join(UPLOAD_DIR, `${streamBaseName}.mp4`);
     
-    // Use FFmpeg to record the stream
-    const command = `${ffmpeg} -i "${stream.url}" -c copy "${outputPath}"`;
+    // Use FFmpeg with improved options for live stream
+    const command = `${ffmpeg} -y -re -i "${stream.url}" -c copy -f mp4 "${outputPath}"`;
+    
+    console.log(`Starting recording of stream ${stream.id} with command: ${command}`);
     
     // Execute ffmpeg command to record the stream
     const recordingProcess = exec(command);
     
-    // Set a timeout to stop the recording after a reasonable time (e.g., 1 hour)
-    // In a real application, you'd want a better mechanism to control recording duration
-    const maxDuration = 60 * 60 * 1000; // 1 hour in milliseconds
+    // Store the active recording process
+    activeRecordings.set(stream.id, {
+      process: recordingProcess,
+      outputPath,
+      streamBaseName
+    });
     
-    setTimeout(() => {
-      if (recordingProcess.pid) {
-        process.kill(recordingProcess.pid, 'SIGTERM');
-      }
+    // Log stdout and stderr for debugging
+    if (recordingProcess.stdout) {
+      recordingProcess.stdout.on('data', (data) => {
+        console.log(`[ffmpeg-stdout] ${data.toString().trim()}`);
+      });
+    }
+    
+    if (recordingProcess.stderr) {
+      recordingProcess.stderr.on('data', (data) => {
+        console.log(`[ffmpeg-stderr] ${data.toString().trim()}`);
+      });
+    }
+    
+    // Set a timeout to stop the recording after a reasonable time (e.g., 3 hours)
+    const maxDuration = 3 * 60 * 60 * 1000; // 3 hours in milliseconds
+    
+    const timeoutId = setTimeout(() => {
+      stopRecording(stream.id);
     }, maxDuration);
     
     // When recording is complete or terminated
     recordingProcess.on('exit', async (code) => {
+      // Clear the timeout if process exits before timeout
+      clearTimeout(timeoutId);
+      
+      // Remove from active recordings
+      const recordingData = activeRecordings.get(stream.id);
+      activeRecordings.delete(stream.id);
+      
+      if (!recordingData) return;
+      
       if (code === 0 || code === null) {
         // Recording finished or was terminated normally
-        await segmentVideo(stream.id, outputPath, streamBaseName);
+        console.log(`Recording of stream ${stream.id} completed successfully`);
+        await segmentVideo(stream.id, recordingData.outputPath, recordingData.streamBaseName);
         await storage.markStreamCompleted(stream.id);
       } else {
         // Recording failed
-        await storage.updateStreamStatus(stream.id, 'error', `Recording failed with code ${code}`);
+        console.error(`Recording of stream ${stream.id} failed with code ${code}`);
+        await storage.updateStreamStatus(stream.id, 'error', `التسجيل فشل (رمز الخطأ: ${code})`);
       }
     });
     
     recordingProcess.on('error', async (error) => {
+      console.error(`Error in recording process for stream ${stream.id}:`, error);
       await storage.updateStreamStatus(stream.id, 'error', error.message);
+      activeRecordings.delete(stream.id);
     });
   } catch (error) {
-    await storage.updateStreamStatus(stream.id, 'error', error instanceof Error ? error.message : 'Unknown error');
+    console.error(`Error starting recording for stream ${stream.id}:`, error);
+    await storage.updateStreamStatus(stream.id, 'error', error instanceof Error ? error.message : 'خطأ غير معروف');
+  }
+}
+
+// Stop an active recording
+export async function stopRecording(streamId: number): Promise<boolean> {
+  const recordingData = activeRecordings.get(streamId);
+  
+  if (!recordingData) {
+    console.log(`No active recording found for stream ${streamId}`);
+    return false;
+  }
+  
+  try {
+    console.log(`Stopping recording for stream ${streamId}`);
+    
+    // Get the process
+    const { process, outputPath, streamBaseName } = recordingData;
+    
+    // Gracefully terminate the process
+    if (process.pid) {
+      process.kill('SIGTERM');
+      console.log(`Sent SIGTERM to process ${process.pid}`);
+    }
+    
+    // Remove from active recordings map
+    activeRecordings.delete(streamId);
+    
+    // Update stream status
+    await storage.updateStreamStatus(streamId, 'completed');
+    
+    // Wait a bit for the file to be properly closed
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    // Start segmentation process
+    if (fs.existsSync(outputPath) && fs.statSync(outputPath).size > 0) {
+      await segmentVideo(streamId, outputPath, streamBaseName);
+    }
+    
+    return true;
+  } catch (error) {
+    console.error(`Error stopping recording for stream ${streamId}:`, error);
+    return false;
   }
 }
 

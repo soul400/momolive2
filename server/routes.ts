@@ -5,7 +5,7 @@ import fs from 'fs';
 import path from 'path';
 import { z } from 'zod';
 import { insertStreamSchema } from '@shared/schema';
-import { recordStream } from './ffmpeg-utils';
+import { recordStream, stopRecording, activeRecordings } from './ffmpeg-utils';
 
 export async function registerRoutes(app: Express): Promise<Server> {
   // Create uploads directory if it doesn't exist
